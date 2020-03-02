@@ -1,0 +1,125 @@
+###########################################################################
+#### Instructions for Running Exchange Server 2016 Cumulative Updates.#####
+###########################################################################
+################ Nicholas Weisbrod - STF Consulting - 2020 ################
+###########################################################################
+
+
+*Estimated time to complete: 60-180 minutes*
+*These instructions do not contain information for updating with a DAG setup*
+*Only the Newest 2 CU versions are available.*
+*No need to install CU's between current and newest versions.*
+*SSL certificate needs to be valid prior to update.*
+*Customizations need to be reapplied*
+
+
+###########################################################################
+############################## Prerequisites ##############################
+###########################################################################
+
+Verify your current build number.
+Open Exchange Management Console and run:
+> Get-ExchangeServer | Format-List Name,Edition,AdminDisplayVersion
+
+Find and Download the CU version you wish to upgrade to. 
+Latest is recommended and only the Newest 2 are available.
+Exchange Build Numbers and Releases
+https://docs.microsoft.com/en-us/Exchange/new-features/build-numbers-and-release-dates?redirectedfrom=MSDN&view=exchserver-2019
+
+Find and verify .NET framework version supported by the Exchange CU you are upgrading to.
+Use matrices located here:
+https://docs.microsoft.com/en-us/Exchange/plan-and-deploy/supportability-matrix?view=exchserver-2019 
+
+Find the .NET Framework offline installer that you need and move to Exchange server.
+Here has .NET 4.8: https://support.microsoft.com/en-us/help/4503548/microsoft-net-framework-4-8-offline-installer-for-windows 
+
+
+###########################################################################
+########################## Backup Customizations ##########################
+###########################################################################
+
+Backup Exchange Transport Rules.
+Open Exchange Management Console and run:
+> $file = Export-TransportRuleCollection; Set-Content -Path "C:\TransportRules.xml" -Value $file.FileData -Encoding Byte
+
+Backup IIS App Pools and IIS Sites. Taking a Screenshot to compare later will also be helpful.
+Open Adminstrative Command Prompt:
+> %windir%\system32\inetsrv\appcmd list apppool /config /xml > c:\AppPools.xml
+> %windir%\system32\inetsrv\appcmd list site /config /xml > c:\Sites.xml
+
+
+###########################################################################
+############################## Installation ###############################
+###########################################################################
+
+*Take a Snapshot in Hypervisor in case server breaks and is not recoverable*
+
+Optional - If you have permission for a full outage. Disable connectivity in firewall from the anti-spam solution (Barracuda, MessageLabs, Mimecast) to Mail Server. Specifically in our world, remove alias from -IN-EX0x-SMTP policy. If any external client sends an email during the maintenance period the email will be held by the anti-spam solution until the Exchange server is back online and Alias is back in SMTP firewall policy. 
+
+Reboot server.
+
+Make sure Windows Installer Service is started.
+Sometimes installing updates for the Microsoft .NET Framework 4 can take longer than expected
+Open Adminstrative Command prompt and run the following:
+> %windir%\microsoft.net\framework\v4.0.30319\ngen.exe update /force /queue
+> %windir%\microsoft.net\framework64\v4.0.30319\ngen.exe update /force /queue
+
+Install .NET 4.8 (x.y) on Exchange server. - This will break Exchange if .NET version is too new for current version of Exchange.
+Make sure Windows Installer Service is started again.
+
+Reboot Exchange Server. -May need to reboot twice, long reboot times.
+
+Prepare AD Schema updates
+-mount Exchange CU ISO. -Note the drive letter for ISO.
+Remove registry key: HKLM\System\ControlSet001\Control\Session Manager\PendingFileRenameOperations
+Open Administrative Command Prompt and run following commands: (Adjust drive letter if necessary.)
+> D:\setup.exe /PrepareSchema /IAcceptExchangeServerLicenseTerms
+> D:\setup.exe /PrepareAD /IAcceptExchangeServerLicenseTerms
+> D:\setup.exe /PrepareDomain /IAcceptExchangeServerLicenseTerms
+
+Replicate across AD in Active Directory Sites and Services
+
+Start Exchange CU.
+Unattended install from Administrative *Powershell*:
+> D:\setup.exe /m:upgrade /IAcceptExchangeServerLicenseTerms
+services will stop, files will copy then components will upgrade
+May require C++ Redistributable Package, follow provided link in error message, download, install and run Command again.
+https://www.microsoft.com/en-us/download/confirmation.aspx?id=40784 -required in 2016 CU15 upgrade.
+*If install fails, open the ISO and just double click setup.exe.
+
+
+Hour+ long wait at this point. 
+Might get an error when finished, starting with "Error: The following error was generated when "$error.Clear(); "
+*If you you do get an error at the end of the install reboot and then try and run "> D:\setup.exe /m:upgrade /IAcceptExchangeServerLicenseTerms" from Administrative Powershell AGAIN. 
+
+Reboot Exchange Server.
+
+Verify build number.
+Open Exchange Management Console and run:
+> Get-ExchangeServer | Format-List Name,Edition,AdminDisplayVersion
+
+Test/Verify Mailflow
+
+Ensure all services, customization, IIS pools and Transport Rules are running and configured properly.
+EMC> Set-ServerComponentState <ServerName> -Component ServerWideOffline -State Active
+
+Optional - Enable connectivity in firewall from the anti-spam solution
+
+Remove any VMWare Snapshots.
+
+###########################################################################
+########################## Import Customizations ##########################
+###########################################################################
+
+Import Exchange Transport Rules. Open Exchange Management Console and run:
+> [Byte[]]$Data = Get-Content -Path "C:\TransportRules.xml" -Encoding Byte -ReadCount 0; Import-TransportRuleCollection -FileData $Data
+
+Import IIS App Pool and Sites from Backup, open Adminstrative Command Prompt:
+> %windir%\system32\inetsrv\appcmd add apppool /in < c:\AppPools.xml
+> %windir%\system32\inetsrv\appcmd add site /in < c:\Sites.xml
+
+Import any OWA customizations. *If Necessary*
+C:\Program Files\Microsoft\Exchange Server\V14\ClientAccess\Owa\*Previous Exchange Version Number*
+The folder (though now unused) should remain after patching. After patching, you can copy your customizations into the new version's folder which will be in \OWA\*New Exchange Version Number* directory.
+Don't just copy the old customizations into the new version directory and overwrite the newer file. Take the time to open up the new version and make sure things haven't changed, then copy/paste your changes back in.
+
